@@ -1,7 +1,7 @@
 import time
 from pathlib import Path
 from statistics import pvariance, fmean
-from typing import Tuple, List
+from typing import Tuple, List, Union
 
 import numpy as np
 import pandas as pd
@@ -9,6 +9,9 @@ import getch
 
 ROOT = Path(__file__).parent.resolve()
 ETALON_DATASET = ROOT / 'etalons.csv'
+
+DEFAULT_TIMES_AUTH = 5
+t_r = {0.05: {5: 2.5706, 6: 2.4469, 7: 2.3646, 8: 2.306, 9: 2.2622}}
 
 
 def enter_word(word: str) -> Tuple[str, List[float]]:
@@ -45,7 +48,24 @@ def get_statistics(arr: List[float]) -> Tuple[float, float]:
     return M, S
 
 
-def get_df_with_stats(word_etalon: str, n_times: int = 5) -> pd.DataFrame:
+def compare_authentication_with_etalons(
+        etalons: pd.DataFrame, val: Tuple[float, float], n_intervals: int, t: float
+) -> Tuple[int, bool]:
+    M, S = val
+
+    S_ = (etalons['S'] + S) * (n_intervals - 1) / (2 * n_intervals - 1)
+    t_p_ = np.abs(etalons['M'] - M) / np.sqrt(S_ * 2 / n_intervals)
+
+    r: int = (t_p_ < t).sum()
+    P = r / etalons.shape[0]
+
+    return r, P >= 0.9
+
+
+def get_df_with_stats(
+        word_etalon: str, n_times: int = 5, validation: bool = False, **kwargs
+) -> Union[pd.DataFrame, Tuple[int, int]]:
+    r, n_authenticated = 0, 0
     d = {'key': [], 'M': [], 'S': []}
 
     for i in range(n_times):
@@ -54,22 +74,20 @@ def get_df_with_stats(word_etalon: str, n_times: int = 5) -> pd.DataFrame:
         word, times = enter_word(word_etalon)
         M, S = get_statistics(times)
 
-        d['key'].append(word)
-        d['M'].append(M)
-        d['S'].append(S)
+        if validation:
+            r_, is_authenticated = compare_authentication_with_etalons(val=(M, S), **kwargs)
+
+            r += r_
+            n_authenticated += int(is_authenticated)
+        else:
+            d['key'].append(word)
+            d['M'].append(M)
+            d['S'].append(S)
+
+    if validation:
+        return r, n_authenticated
 
     return pd.DataFrame(d)
-
-
-def compare_authentication_with_etalons(
-        etalons: pd.DataFrame, val: pd.Series, n_intervals: int, t: float
-) -> int:
-    S_ = (etalons['S'] + val['S']) * (n_intervals - 1) / (2 * n_intervals - 1)
-    t_p_ = np.abs(etalons['M'] - val['M']) / np.sqrt(S_ * 2 / n_intervals)
-
-    r: int = (t_p_ < t).sum()
-
-    return r
 
 
 def create_etalon():
@@ -88,9 +106,6 @@ def create_etalon():
 
 
 def validate():
-    r = 0
-    t_r = {0.05: {5: 2.5706, 6: 2.4469, 7: 2.3646, 8: 2.306, 9: 2.2622}}
-
     df_etalon = pd.read_csv(ETALON_DATASET)
     etalon_key_word = df_etalon['key'][0]
     n_intervals = len(etalon_key_word) - 1
@@ -105,14 +120,21 @@ def validate():
         print(f'ERROR: alpha {alpha} doesnt exist!')
         return validate()
 
-    df = get_df_with_stats(etalon_key_word)
-    for row, values in df.iterrows():
-        r += compare_authentication_with_etalons(df_etalon, values, n_intervals, t_r[alpha][n_intervals])
+    r, n_auth = get_df_with_stats(
+        etalon_key_word,
+        n_times=DEFAULT_TIMES_AUTH,
+        validation=True,
+        etalons=df_etalon,
+        t=t_r[alpha][n_intervals],
+        n_intervals=n_intervals
+    )
 
-    k_e = df_etalon.shape[0] * df.shape[0]
+    k_e = df_etalon.shape[0] * DEFAULT_TIMES_AUTH
     P = r / k_e
+    N1 = (DEFAULT_TIMES_AUTH - n_auth) / DEFAULT_TIMES_AUTH
 
     print(f'\n\nP={P}')
+    print(f'N1={N1}')
 
     if P >= 0.9:
         print("====> Validation successful\n")

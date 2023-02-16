@@ -4,3 +4,5 @@ pandas
 getch
 nltk
 contractions
+Pillow
+scipy
